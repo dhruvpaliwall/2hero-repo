@@ -1,0 +1,74 @@
+name: Build and deploy to Cloud Run
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: tohero-elx-lens-c7b2
+  REGION: europe-north1
+  AR_REPOSITORY: electrolux-video-studio
+  SERVICE_NAME: electrolux-video-studio
+  RUNTIME_SERVICE_ACCOUNT: video-studio-runtime@tohero-elx-lens-c7b2.iam.gserviceaccount.com
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - id: image
+        name: Build and push container
+        run: |
+          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/${SERVICE_NAME}:${GITHUB_SHA}"
+          docker build --tag "$image" .
+          docker push "$image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: ${{ steps.image.outputs.image }}
+          service_account: ${{ env.RUNTIME_SERVICE_ACCOUNT }}
+          flags: --no-allow-unauthenticated
+
+      - name: Report deployment URL
+        run: echo "Deployed to ${{ steps.deploy.outputs.url }}"

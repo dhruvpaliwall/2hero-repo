@@ -1,0 +1,6 @@
+{
+  "name": "Hackathon dev container (image build)",
+  "build": {
+    "dockerfile": "Dockerfile"
+  }
+}
